@@ -1,0 +1,15 @@
+# Core Deep Learning & NLP
+torch>=2.2.0
+transformers>=4.40.0
+accelerate>=0.28.0
+
+# Scientific Computing & Utilities
+numpy>=1.26.0
+pyyaml>=6.0.1
+psutil>=5.9.0
+rich>=13.7.0
+
+# Development & Testing
+pytest>=8.0.0
+pytest-cov>=4.1.0
+ruff>=0.3.0

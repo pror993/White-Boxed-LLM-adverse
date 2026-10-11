@@ -1,0 +1,26 @@
+model:
+  model_name_or_path: "meta-llama/Llama-3.2-1B-Instruct"
+  torch_dtype: "float16"
+  device_map: "mps"
+  trust_remote_code: true
+  attn_implementation: "sdpa"
+  use_cache: false
+  max_sequence_length: 1024
+
+optimizer:
+  num_steps: 250
+  batch_size: 256
+  top_k: 128
+  micro_batch_size: 16
+  coordinate_selection_strategy: "random"
+  early_stopping_loss: 0.05
+  allow_non_ascii: false
+  filter_special_tokens: true
+  seed: 42
+
+evaluation:
+  benchmark_name: "llama_sensitivity_profile"
+  num_samples: 25
+  output_dir: "experiments/results/llama_3_2_1b"
+  save_trajectories: true
+  profile_memory: true
