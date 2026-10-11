@@ -434,6 +434,7 @@ class CoordinateGradientOptimizer(DiscreteOptimizer):
         current_ids: torch.Tensor,
         slices: TokenSlices,
         log_interval: int = 1,
+        callback: Optional[Callable[[OptimizationStepResult], None]] = None,
     ) -> OptimizationTrajectory:
         """Run complete coordinate gradient search loop on formatted token slices.
 
@@ -492,6 +493,8 @@ class CoordinateGradientOptimizer(DiscreteOptimizer):
             )
 
             self.trajectory.add_step(step_result)
+            if callback is not None:
+                callback(step_result)
 
             if step_idx % log_interval == 0 or step_result.success:
                 table = Table(show_header=True, header_style="bold magenta", expand=False)
