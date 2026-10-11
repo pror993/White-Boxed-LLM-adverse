@@ -14,6 +14,11 @@ from src.optimizers.coordinate_gradient import (
     extract_embedding_matrix,
     sample_candidate_substitutions,
 )
+from src.optimizers.draft_filter import (
+    DraftFilterConfig,
+    DraftModelFilter,
+    DraftScreeningResult,
+)
 
 __all__ = [
     "DiscreteOptimizer",
@@ -26,4 +31,7 @@ __all__ = [
     "compute_token_gradients",
     "sample_candidate_substitutions",
     "evaluate_candidates_batched",
+    "DraftFilterConfig",
+    "DraftModelFilter",
+    "DraftScreeningResult",
 ]

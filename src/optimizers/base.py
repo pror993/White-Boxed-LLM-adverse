@@ -45,7 +45,11 @@ class OptimizerConfig:
     dtype: str = "float16"
     seed: Optional[int] = 42
     profile_memory: bool = True
-
+    enable_draft_filtering: bool = False
+    draft_filtering_ratio: int = 8
+    objective_type: str = "cross_entropy"  # "cross_entropy", "mellowmax", "regularized_ppl"
+    mellowmax_alpha: float = 1.0
+    perplexity_lambda: float = 0.0
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
 

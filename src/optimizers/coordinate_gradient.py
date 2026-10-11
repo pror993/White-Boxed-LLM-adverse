@@ -60,6 +60,8 @@ def compute_token_gradients(
     embedding_matrix: Optional[torch.Tensor] = None,
     filter_mask: Optional[torch.Tensor] = None,
     device: Optional[torch.device] = None,
+    loss_type: str = "cross_entropy",
+    mellowmax_alpha: float = 1.0,
 ) -> Tuple[torch.Tensor, float]:
     """Calculate exact gradients of target loss with respect to discrete token coordinates.
 
@@ -100,8 +102,14 @@ def compute_token_gradients(
     target_logits = logits[0, loss_slice, :].contiguous()  # [target_len, vocab_size]
     target_labels = input_ids[0, target_slice].to(dev).contiguous()  # [target_len]
 
-    loss_fct = nn.CrossEntropyLoss(reduction="mean")
-    loss = loss_fct(target_logits, target_labels)
+    if loss_type == "mellowmax":
+        from src.objectives.mellowmax import mellowmax_loss
+        base_ce = nn.CrossEntropyLoss(reduction="none")
+        token_losses = base_ce(target_logits, target_labels)
+        loss = mellowmax_loss(token_losses, alpha=mellowmax_alpha, dim=-1)
+    else:
+        loss_fct = nn.CrossEntropyLoss(reduction="mean")
+        loss = loss_fct(target_logits, target_labels)
     current_loss_val = float(loss.item())
 
     # 4. Backward pass to extract embedding gradients
@@ -193,6 +201,8 @@ def evaluate_candidates_batched(
     target_slice: slice,
     micro_batch_size: int = 64,
     device: Optional[torch.device] = None,
+    loss_type: str = "cross_entropy",
+    mellowmax_alpha: float = 1.0,
 ) -> CandidateEvaluationBatch:
     """Evaluate candidate sequences in micro-batches to strictly observe memory limits.
 
@@ -231,7 +241,11 @@ def evaluate_candidates_batched(
                 chunk_target_logits.view(-1, vocab_sz),
                 chunk_target_labels.view(-1),
             )
-            per_seq_loss = flat_loss.view(chunk_b, target_len).mean(dim=1)
+            if loss_type == "mellowmax":
+                from src.objectives.mellowmax import mellowmax_loss
+                per_seq_loss = mellowmax_loss(flat_loss.view(chunk_b, target_len), alpha=mellowmax_alpha, dim=-1)
+            else:
+                per_seq_loss = flat_loss.view(chunk_b, target_len).mean(dim=1)
             candidate_losses.append(per_seq_loss.cpu())
 
             del batch_chunk, outputs, logits, chunk_target_logits, chunk_target_labels
@@ -262,6 +276,7 @@ class CoordinateGradientOptimizer(DiscreteOptimizer):
         self,
         model_wrapper: CausalLMModelWrapper,
         config: Optional[OptimizerConfig] = None,
+        draft_filter: Optional[Any] = None,
     ):
         super().__init__(
             model=model_wrapper.model,
@@ -269,13 +284,13 @@ class CoordinateGradientOptimizer(DiscreteOptimizer):
             config=config,
         )
         self.wrapper = model_wrapper
+        self.draft_filter = draft_filter
         self.embedding_matrix = self.wrapper.get_embedding_matrix()
         self.filter_mask = (
             self.wrapper.build_non_ascii_mask(device=self.device)
             if self.config.filter_special_tokens or not self.config.allow_non_ascii
             else None
         )
-
     def compute_coordinate_gradients(
         self,
         input_ids: torch.Tensor,
@@ -292,9 +307,10 @@ class CoordinateGradientOptimizer(DiscreteOptimizer):
             opt_slice=opt_slice,
             target_slice=target_slice,
             loss_slice=loss_slice,
-            embedding_matrix=self.embedding_matrix,
             filter_mask=self.filter_mask,
             device=self.device,
+            loss_type=self.config.objective_type,
+            mellowmax_alpha=self.config.mellowmax_alpha,
         )
 
     def sample_candidates(
@@ -350,14 +366,35 @@ class CoordinateGradientOptimizer(DiscreteOptimizer):
             opt_slice=opt_slice,
         )
 
-        # 3. Micro-batched forward evaluation
+        # 2.5 Multi-Fidelity Draft Model Screening
+        if self.draft_filter is not None and self.config.enable_draft_filtering:
+            draft_res = self.draft_filter.filter_candidates(
+                candidate_ids=candidate_ids,
+                loss_slice=loss_slice,
+                target_slice=target_slice,
+                filtering_ratio=self.config.draft_filtering_ratio,
+            )
+            eval_candidates = draft_res.filtered_candidate_ids
+            draft_meta = {
+                "draft_screened": True,
+                "original_batch": draft_res.original_batch_size,
+                "retained_batch": draft_res.filtered_batch_size,
+                "screening_time": draft_res.screening_time_seconds,
+            }
+        else:
+            eval_candidates = candidate_ids
+            draft_meta = {"draft_screened": False}
+
+        # 3. Micro-batched forward evaluation on target model
         eval_batch = evaluate_candidates_batched(
             model=self.model,
-            candidate_ids=candidate_ids,
+            candidate_ids=eval_candidates,
             loss_slice=loss_slice,
             target_slice=target_slice,
             micro_batch_size=self.config.micro_batch_size,
             device=self.device,
+            loss_type=self.config.objective_type,
+            mellowmax_alpha=self.config.mellowmax_alpha,
         )
 
         best_cand_ids = eval_batch.candidate_ids[eval_batch.best_candidate_idx].unsqueeze(0)
@@ -389,6 +426,7 @@ class CoordinateGradientOptimizer(DiscreteOptimizer):
                 if self.config.early_stopping_loss
                 else False
             ),
+            metadata=draft_meta,
         )
 
     def optimize_sequence(
